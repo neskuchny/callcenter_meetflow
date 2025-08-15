@@ -1077,11 +1077,11 @@ def get_calls():
                 'aiSummary': str(row.get('AI-резюме', '')),
                 'keyInsight': str(row.get('Ключевой вывод', '')),
                 'recommendation': str(row.get('Рекомендации', '')),
-                'score': row.get('AI-оценка', 0),
+                'score': _safe_numeric(row.get('AI-оценка', 0)),
                 'callType': str(row.get('Тип звонка', '')),
                 'callResult': str(row.get('Результат звонка', '')),
-                'salesReadiness': row.get('Готовность к продаже', 0),
-                'conversionProbability': row.get('Вероятность конверсии', 0),
+                'salesReadiness': _safe_numeric(row.get('Готовность к продаже', 0)),
+                'conversionProbability': _safe_numeric(row.get('Вероятность конверсии', 0)),
                 
                 # Обрабатываем сложные поля
                 'managerPerformance': _parse_manager_performance(row.get('Оценка менеджера', '')),
@@ -1938,6 +1938,35 @@ def _parse_tags(value):
     except:
         # Если не JSON, возвращаем как список с одним элементом
         return [str(value)] if str(value) else []
+
+def _safe_numeric(value, default=0):
+    """Безопасно преобразует значение в число, заменяя NaN и None на default"""
+    try:
+        if pd.isna(value) or value is None:
+            return default
+        
+        # Попытка преобразования в число
+        if isinstance(value, (int, float)):
+            # Проверяем на NaN для float
+            if pd.isna(value):
+                return default
+            return value
+        
+        # Если строка, пытаемся парсить
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return default
+            
+            # Пытаемся извлечь число из строки (например "5/10" -> 5)
+            if '/' in value:
+                value = value.split('/')[0]
+            
+            return float(value)
+        
+        return default
+    except (ValueError, TypeError, AttributeError):
+        return default
 
 def _format_audio_duration(duration_seconds):
     """Форматирует длительность в секундах в формат MM:SS"""
