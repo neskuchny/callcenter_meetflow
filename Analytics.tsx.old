@@ -1,0 +1,971 @@
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  ScatterChart,
+  Scatter,
+  ZAxis,
+} from "recharts";
+import CustomPromptAnalysis from "@/components/analysis/CustomPromptAnalysis";
+import { fetchCalls } from "@/lib/api";
+import { Call } from "@/components/calls/CallsTable";
+import { Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+// Цвета для графиков
+const COLORS = ["#22c55e", "#f59e0b", "#ef4444", "#3b82f6", "#8884d8", "#82ca9d"];
+
+const Analytics = () => {
+  const [calls, setCalls] = useState<Call[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [timeFilterType, setTimeFilterType] = useState<"hour" | "day" | "month">("hour");
+
+  // Загрузка данных при монтировании компонента
+  useEffect(() => {
+    async function loadCalls() {
+      try {
+        setLoading(true);
+        const callsData = await fetchCalls();
+        setCalls(callsData);
+      } catch (err) {
+        setError("Не удалось загрузить данные о звонках");
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadCalls();
+  }, []);
+
+  // Вычисление данных для графика эффективности по месяцам
+  const performanceData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Группируем звонки по месяцам
+    const callsByMonth: Record<string, { 
+      total: number, 
+      successful: number, 
+      unsuccessful: number, 
+      average_score: number,
+      count_with_score: number 
+    }> = {};
+
+    // Словарь для конвертации месяцев
+    const monthMap: Record<string, string> = {
+      "01": "Янв", "02": "Фев", "03": "Март", "04": "Апр", "05": "Май",
+      "06": "Июнь", "07": "Июль", "08": "Авг", "09": "Сен", "10": "Окт",
+      "11": "Ноя", "12": "Дек"
+    };
+
+    // Обрабатываем каждый звонок
+    calls.forEach(call => {
+      if (!call.date) return;
+
+      // Извлекаем месяц из даты
+      const dateParts = call.date.split('.');
+      if (dateParts.length !== 3) return;
+      
+      const month = monthMap[dateParts[1]] || dateParts[1];
+      const year = dateParts[2];
+      const monthKey = `${month} ${year}`;
+
+      // Инициализируем данные для месяца, если их еще нет
+      if (!callsByMonth[monthKey]) {
+        callsByMonth[monthKey] = { 
+          total: 0, 
+          successful: 0, 
+          unsuccessful: 0, 
+          average_score: 0,
+          count_with_score: 0 
+        };
+      }
+
+      // Обновляем счетчики для месяца
+      callsByMonth[monthKey].total += 1;
+      
+      // Считаем успешные/неуспешные звонки
+      if (call.callResult === "успешный" || call.status === "успешный") {
+        callsByMonth[monthKey].successful += 1;
+      } else if (call.callResult === "неуспешный" || call.status === "неуспешный") {
+        callsByMonth[monthKey].unsuccessful += 1;
+      }
+      
+      // Собираем данные о средней оценке
+      if (call.score) {
+        callsByMonth[monthKey].average_score += call.score;
+        callsByMonth[monthKey].count_with_score += 1;
+      }
+    });
+
+    // Преобразуем собранные данные в формат для графика
+    return Object.entries(callsByMonth).map(([month, data]) => {
+      // Рассчитываем процент успешных звонков и среднюю оценку
+      const successRate = data.total > 0 ? (data.successful / data.total) * 100 : 0;
+      const avgScore = data.count_with_score > 0 ? data.average_score / data.count_with_score : 0;
+      
+      return {
+        name: month,
+        успешные: data.successful,
+        неуспешные: data.unsuccessful,
+        конверсия: Math.round(successRate),
+        средняя_оценка: Math.round(avgScore * 10) / 10,
+        всего: data.total
+      };
+    }).sort((a, b) => {
+      // Сортируем месяцы в хронологическом порядке
+      const months = Object.values(monthMap);
+      const aMonthIndex = months.indexOf(a.name.split(' ')[0]);
+      const bMonthIndex = months.indexOf(b.name.split(' ')[0]);
+      return aMonthIndex - bMonthIndex;
+    });
+  }, [calls]);
+
+  // Вычисление данных для графика влияния длительности на эффективность
+  const durationData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Группы длительности звонков
+    const groups = [
+      { name: "0-1 мин", min: 0, max: 1, data: { количество: 0, успешные: 0, средняя_оценка: 0 } },
+      { name: "1-3 мин", min: 1, max: 3, data: { количество: 0, успешные: 0, средняя_оценка: 0 } },
+      { name: "3-5 мин", min: 3, max: 5, data: { количество: 0, успешные: 0, средняя_оценка: 0 } },
+      { name: "5-10 мин", min: 5, max: 10, data: { количество: 0, успешные: 0, средняя_оценка: 0 } },
+      { name: ">10 мин", min: 10, max: Number.MAX_SAFE_INTEGER, data: { количество: 0, успешные: 0, средняя_оценка: 0 } }
+    ];
+
+    // Обрабатываем каждый звонок
+    calls.forEach(call => {
+      if (!call.duration) return;
+
+      // Извлекаем длительность звонка в минутах
+      let durationMinutes = 0;
+      const durationMatch = call.duration.match(/(\d+)м\s*(\d*)с?/);
+      if (durationMatch) {
+        const minutes = parseInt(durationMatch[1], 10) || 0;
+        const seconds = parseInt(durationMatch[2], 10) || 0;
+        durationMinutes = minutes + seconds / 60;
+      }
+
+      // Находим группу для этой длительности
+      const group = groups.find(g => durationMinutes >= g.min && durationMinutes < g.max);
+      if (!group) return;
+
+      // Обновляем данные группы
+      group.data.количество += 1;
+      
+      // Учитываем результат звонка
+      if (call.callResult === "успешный" || call.status === "успешный") {
+        group.data.успешные += 1;
+      }
+
+      // Учитываем оценку звонка
+      if (call.score) {
+        group.data.средняя_оценка += call.score;
+      }
+    });
+
+    // Преобразуем собранные данные в формат для графика
+    return groups.map(group => {
+      const totalCalls = group.data.количество;
+      const successRate = totalCalls > 0 ? (group.data.успешные / totalCalls) * 100 : 0;
+      const avgScore = totalCalls > 0 ? group.data.средняя_оценка / totalCalls : 0;
+      
+      return {
+        name: group.name,
+        количество: totalCalls,
+        конверсия: Math.round(successRate),
+        средняя_оценка: Math.round(avgScore * 10) / 10
+      };
+    });
+  }, [calls]);
+
+  // Вычисление данных для графика основных проблем на основе тегов
+  const topIssuesData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Подсчитываем частоту каждого тега
+    const tagCounts: Record<string, number> = {};
+    
+    calls.forEach(call => {
+      // Пропускаем успешные звонки
+      if (call.callResult === "успешный" || call.status === "успешный") return;
+      
+      // Обрабатываем теги
+      if (call.tags && Array.isArray(call.tags)) {
+        call.tags.forEach(tag => {
+          if (typeof tag === 'string') {
+            if (!tagCounts[tag]) tagCounts[tag] = 0;
+            tagCounts[tag] += 1;
+          }
+        });
+      }
+    });
+
+    // Преобразуем в массив и сортируем по убыванию
+    return Object.entries(tagCounts)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6); // Берем топ-6 тегов
+  }, [calls]);
+
+  // Вычисление данных для графика эффективности менеджеров
+  const managersData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Группируем данные по менеджерам
+    const managerStats: Record<string, { 
+      total: number, 
+      successful: number, 
+      average_score: number,
+      count_with_score: number
+    }> = {};
+
+    // Обрабатываем каждый звонок
+    calls.forEach(call => {
+      const manager = call.agent || "Неизвестно";
+      
+      // Инициализируем данные для менеджера, если их еще нет
+      if (!managerStats[manager]) {
+        managerStats[manager] = { 
+          total: 0, 
+          successful: 0, 
+          average_score: 0,
+          count_with_score: 0 
+        };
+      }
+
+      // Обновляем счетчики для менеджера
+      managerStats[manager].total += 1;
+      
+      // Подсчитываем успешные звонки
+      if (call.callResult === "успешный" || call.status === "успешный") {
+        managerStats[manager].successful += 1;
+      }
+      
+      // Собираем данные о средней оценке
+      if (call.score) {
+        managerStats[manager].average_score += call.score;
+        managerStats[manager].count_with_score += 1;
+      }
+    });
+
+    // Преобразуем собранные данные в формат для графика
+    return Object.entries(managerStats)
+      .map(([manager, data]) => {
+        // Рассчитываем процент успешных звонков и среднюю оценку
+        const successRate = data.total > 0 ? (data.successful / data.total) * 100 : 0;
+        const avgScore = data.count_with_score > 0 ? data.average_score / data.count_with_score : 0;
+        
+        return {
+          name: manager,
+          успешные: Math.round(successRate),
+          средняя_оценка: Math.round(avgScore * 10) / 10,
+          количество: data.total
+        };
+      })
+      .sort((a, b) => b.успешные - a.успешные)
+      .slice(0, 8); // Берем топ-8 менеджеров
+  }, [calls]);
+
+  // Вычисление данных для графика распределения звонков по времени
+  const timeDistributionData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Группируем звонки по выбранному времени (час, день, месяц)
+    const timeStats: Record<string, {
+      count: number,
+      successful: number,
+      average_score: number,
+      count_with_score: number,
+      average_duration: number,
+      count_with_duration: number
+    }> = {};
+
+    // Обрабатываем каждый звонок
+    calls.forEach(call => {
+      if (!call.time || !call.date) return;
+
+      let timeKey = "";
+      
+      // Определяем ключ в зависимости от выбранного типа фильтрации
+      if (timeFilterType === "hour") {
+        // Для часов используем только часы из времени
+        const hourMatch = call.time.match(/^(\d+):/);
+        if (hourMatch) {
+          const hour = parseInt(hourMatch[1], 10);
+          timeKey = `${hour}:00`;
+        }
+      } else if (timeFilterType === "day") {
+        // Для дней используем день недели
+        const dateParts = call.date.split('.');
+        if (dateParts.length === 3) {
+          const day = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10) - 1;
+          const year = parseInt(dateParts[2], 10);
+          const date = new Date(year, month, day);
+          
+          // Получаем день недели (0 - воскресенье, 1 - понедельник и т.д.)
+          const dayOfWeek = date.getDay();
+          const dayNames = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+          timeKey = dayNames[dayOfWeek];
+        }
+      } else if (timeFilterType === "month") {
+        // Для месяцев используем месяц из даты
+        const dateParts = call.date.split('.');
+        if (dateParts.length === 3) {
+          const monthNum = parseInt(dateParts[1], 10);
+          const monthNames = ["Янв", "Фев", "Март", "Апр", "Май", "Июнь", "Июль", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+          timeKey = monthNames[monthNum - 1];
+        }
+      }
+
+      if (!timeKey) return;
+
+      // Инициализируем данные для этого времени, если их еще нет
+      if (!timeStats[timeKey]) {
+        timeStats[timeKey] = {
+          count: 0,
+          successful: 0,
+          average_score: 0,
+          count_with_score: 0,
+          average_duration: 0,
+          count_with_duration: 0
+        };
+      }
+
+      // Обновляем счетчики
+      timeStats[timeKey].count += 1;
+      
+      // Подсчитываем успешные звонки
+      if (call.callResult === "успешный" || call.status === "успешный") {
+        timeStats[timeKey].successful += 1;
+      }
+      
+      // Собираем данные о средней оценке
+      if (call.score) {
+        timeStats[timeKey].average_score += call.score;
+        timeStats[timeKey].count_with_score += 1;
+      }
+
+      // Собираем данные о средней длительности
+      if (call.duration) {
+        // Извлекаем длительность звонка в минутах
+        let durationMinutes = 0;
+        const durationMatch = call.duration.match(/(\d+)м\s*(\d*)с?/);
+        if (durationMatch) {
+          const minutes = parseInt(durationMatch[1], 10) || 0;
+          const seconds = parseInt(durationMatch[2], 10) || 0;
+          durationMinutes = minutes + seconds / 60;
+          
+          timeStats[timeKey].average_duration += durationMinutes;
+          timeStats[timeKey].count_with_duration += 1;
+        }
+      }
+    });
+
+    // Преобразуем собранные данные в формат для графика
+    let result = Object.entries(timeStats).map(([time, data]) => {
+      // Рассчитываем процент успешных звонков, среднюю оценку и длительность
+      const successRate = data.count > 0 ? (data.successful / data.count) * 100 : 0;
+      const avgScore = data.count_with_score > 0 ? data.average_score / data.count_with_score : 0;
+      const avgDuration = data.count_with_duration > 0 ? data.average_duration / data.count_with_duration : 0;
+      
+      return {
+        name: time,
+        количество: data.count,
+        конверсия: Math.round(successRate),
+        средняя_оценка: Math.round(avgScore * 10) / 10,
+        средняя_длительность: Math.round(avgDuration * 10) / 10
+      };
+    });
+
+    // Сортируем данные в зависимости от типа фильтрации
+    if (timeFilterType === "hour") {
+      // Сортируем по часам
+      result = result.sort((a, b) => {
+        const hourA = parseInt(a.name.split(':')[0], 10);
+        const hourB = parseInt(b.name.split(':')[0], 10);
+        return hourA - hourB;
+      });
+    } else if (timeFilterType === "day") {
+      // Сортируем по дням недели
+      const dayOrder = {"Пн": 1, "Вт": 2, "Ср": 3, "Чт": 4, "Пт": 5, "Сб": 6, "Вс": 7};
+      result = result.sort((a, b) => {
+        return (dayOrder[a.name as keyof typeof dayOrder] || 0) - (dayOrder[b.name as keyof typeof dayOrder] || 0);
+      });
+    } else if (timeFilterType === "month") {
+      // Сортируем по месяцам
+      const monthOrder = {"Янв": 1, "Фев": 2, "Март": 3, "Апр": 4, "Май": 5, "Июнь": 6, "Июль": 7, "Авг": 8, "Сен": 9, "Окт": 10, "Ноя": 11, "Дек": 12};
+      result = result.sort((a, b) => {
+        return (monthOrder[a.name as keyof typeof monthOrder] || 0) - (monthOrder[b.name as keyof typeof monthOrder] || 0);
+      });
+    }
+
+    return result;
+  }, [calls, timeFilterType]);
+
+  // Вычисление данных для графика соотношения длительности и оценки
+  const durationScoreData = useMemo(() => {
+    if (!calls.length) return [];
+
+    // Обрабатываем звонки с оценкой и длительностью
+    return calls
+      .filter(call => call.score && call.duration)
+      .map(call => {
+        // Извлекаем длительность звонка в минутах
+        let durationMinutes = 0;
+        const durationMatch = call.duration?.match(/(\d+)м\s*(\d*)с?/);
+        if (durationMatch) {
+          const minutes = parseInt(durationMatch[1], 10) || 0;
+          const seconds = parseInt(durationMatch[2], 10) || 0;
+          durationMinutes = minutes + seconds / 60;
+        }
+
+        // Определяем категорию результата для цвета точки
+        let category = "Требует внимания";
+        if (call.callResult === "успешный" || call.status === "успешный") {
+          category = "Успешный";
+        } else if (call.callResult === "неуспешный" || call.status === "неуспешный") {
+          category = "Неуспешный";
+        }
+
+        return {
+          x: durationMinutes,
+          y: call.score,
+          z: 50, // Размер точки
+          category,
+          callId: call.id,
+          agent: call.agent
+        };
+      });
+  }, [calls]);
+
+  // Если данные загружаются, показываем индикатор загрузки
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-[calc(100vh-200px)]">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 mx-auto mb-4 animate-spin text-primary" />
+          <p className="text-xl">Загрузка данных...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Если произошла ошибка, показываем сообщение об ошибке
+  if (error) {
+    return (
+      <div className="text-center text-red-500 py-10">
+        <p className="text-xl mb-2">Ошибка при загрузке данных</p>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  // Если нет данных, показываем сообщение
+  if (!calls.length) {
+    return (
+      <div className="text-center py-10">
+        <p className="text-xl mb-2">Нет данных о звонках</p>
+        <p className="text-muted-foreground">Загрузите файл со звонками для анализа</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight">
+          Расширенная аналитика
+        </h2>
+        <p className="text-muted-foreground">
+          Подробные отчеты и аналитика звонков на основе реальных данных
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2 items-center">
+          <Badge variant="outline" className="bg-blue-50 text-blue-800 px-3 py-1">
+            Всего звонков: {calls.length}
+          </Badge>
+          
+          <Badge variant="outline" className="bg-green-50 text-green-800 px-3 py-1">
+            Успешных: {calls.filter(call => call.callResult === "успешный" || call.status === "успешный").length}
+          </Badge>
+          
+          <Badge variant="outline" className="bg-red-50 text-red-800 px-3 py-1">
+            Неуспешных: {calls.filter(call => call.callResult === "неуспешный" || call.status === "неуспешный").length}
+          </Badge>
+        </div>
+      </div>
+
+      <Tabs defaultValue="charts">
+        <TabsList>
+          <TabsTrigger value="charts">Графики и отчеты</TabsTrigger>
+          <TabsTrigger value="custom-analysis">Пользовательский анализ</TabsTrigger>
+        </TabsList>
+        <TabsContent value="charts" className="space-y-6">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Эффективность по месяцам</CardTitle>
+                <CardDescription>
+                  Динамика успешных и неуспешных звонков
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={performanceData}
+                    margin={{
+                      top: 10,
+                      right: 20,
+                      left: 10,
+                      bottom: 10,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      tickFormatter={(value) => `${value}%`}
+                    />
+                    <Tooltip formatter={(value, name) => {
+                      if (name === "конверсия" || name === "средняя_оценка") {
+                        return [`${value}${name === "конверсия" ? "%" : ""}`];
+                      }
+                      return [value, name];
+                    }} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="конверсия"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Конверсия"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="средняя_оценка"
+                      stroke="#22c55e"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                      name="Средняя оценка"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Влияние длительности на эффективность</CardTitle>
+                <CardDescription>
+                  Количество звонков и процент конверсии по длительности
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={durationData}
+                    margin={{
+                      top: 10,
+                      right: 20,
+                      left: 10,
+                      bottom: 10,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      yAxisId="left"
+                      orientation="left"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      tickFormatter={(value) => `${value}%`}
+                    />
+                    <Tooltip />
+                    <Legend />
+                    <Bar
+                      yAxisId="left"
+                      dataKey="количество"
+                      fill="#94a3b8"
+                      radius={[4, 4, 0, 0]}
+                      name="Количество звонков"
+                    />
+                    <Bar
+                      yAxisId="right"
+                      dataKey="конверсия"
+                      fill="#22c55e"
+                      radius={[4, 4, 0, 0]}
+                      name="Конверсия (%)"
+                    />
+                    <Bar
+                      yAxisId="right"
+                      dataKey="средняя_оценка"
+                      fill="#3b82f6"
+                      radius={[4, 4, 0, 0]}
+                      name="Средняя оценка"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Основные проблемы</CardTitle>
+                <CardDescription>
+                  Распределение основных причин неудачных звонков
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-80">
+                {topIssuesData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={topIssuesData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        fill="#8884d8"
+                        paddingAngle={2}
+                        dataKey="value"
+                        label={({ name, percent }) =>
+                          `${name}: ${(percent * 100).toFixed(0)}%`
+                        }
+                        labelLine={false}
+                      >
+                        {topIssuesData.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={COLORS[index % COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value, name) => [`${value} звонков`, name]}
+                      />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-muted-foreground">Недостаточно данных для анализа проблем</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Эффективность менеджеров</CardTitle>
+                <CardDescription>
+                  Сравнение успешности звонков по менеджерам
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    layout="vertical"
+                    data={managersData}
+                    margin={{ top: 10, right: 40, left: 40, bottom: 10 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      tickLine={false}
+                      axisLine={false}
+                      domain={[0, 100]}
+                      tickFormatter={(value) => `${value}%`}
+                    />
+                    <YAxis
+                      dataKey="name"
+                      type="category"
+                      tickLine={false}
+                      axisLine={false}
+                      width={80}
+                    />
+                    <Tooltip
+                      formatter={(value, name) => {
+                        if (name === "успешные") return [`${value}%`, "Успешные звонки"];
+                        if (name === "средняя_оценка") return [`${value}`, "Средняя оценка"];
+                        return [value, name];
+                      }}
+                    />
+                    <Legend />
+                    <Bar 
+                      dataKey="успешные" 
+                      fill="#22c55e" 
+                      radius={[0, 4, 4, 0]}
+                      name="Успешные звонки (%)"
+                    />
+                    <Bar 
+                      dataKey="средняя_оценка" 
+                      fill="#3b82f6" 
+                      radius={[0, 4, 4, 0]}
+                      name="Средняя оценка"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Новый блок с графиками распределения по времени */}
+          <div className="grid grid-cols-1 gap-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Распределение звонков по времени</CardTitle>
+                  <CardDescription>
+                    Анализ эффективности звонков в зависимости от времени
+                  </CardDescription>
+                </div>
+                <Select value={timeFilterType} onValueChange={(value) => setTimeFilterType(value as "hour" | "day" | "month")}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Выберите период" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hour">По часам</SelectItem>
+                    <SelectItem value="day">По дням недели</SelectItem>
+                    <SelectItem value="month">По месяцам</SelectItem>
+                  </SelectContent>
+                </Select>
+              </CardHeader>
+              <CardContent className="h-96">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={timeDistributionData}
+                    margin={{
+                      top: 10,
+                      right: 20,
+                      left: 10,
+                      bottom: 10,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      yAxisId="left"
+                      orientation="left"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      tickFormatter={(value) => `${value}%`}
+                    />
+                    <Tooltip />
+                    <Legend />
+                    <Bar
+                      yAxisId="left"
+                      dataKey="количество"
+                      fill="#94a3b8"
+                      radius={[4, 4, 0, 0]}
+                      name="Количество звонков"
+                    />
+                    <Bar
+                      yAxisId="right"
+                      dataKey="конверсия"
+                      fill="#22c55e"
+                      radius={[4, 4, 0, 0]}
+                      name="Конверсия (%)"
+                    />
+                    <Bar
+                      yAxisId="left"
+                      dataKey="средняя_длительность"
+                      fill="#f59e0b"
+                      radius={[4, 4, 0, 0]}
+                      name="Средняя длительность (мин)"
+                    />
+                    <Bar
+                      yAxisId="right"
+                      dataKey="средняя_оценка"
+                      fill="#3b82f6"
+                      radius={[4, 4, 0, 0]}
+                      name="Средняя оценка"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Соотношение длительности и оценки звонков</CardTitle>
+                <CardDescription>
+                  Распределение звонков по длительности и оценке эффективности
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-96">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart
+                    margin={{
+                      top: 20,
+                      right: 20,
+                      bottom: 20,
+                      left: 20,
+                    }}
+                  >
+                    <CartesianGrid />
+                    <XAxis
+                      type="number"
+                      dataKey="x"
+                      name="Длительность (мин)"
+                      unit=" мин"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="y"
+                      name="Оценка"
+                      tickLine={false}
+                      axisLine={false}
+                      fontSize={12}
+                      domain={[0, 10]}
+                    />
+                    <ZAxis type="number" dataKey="z" range={[20, 100]} />
+                    <Tooltip 
+                      cursor={{ strokeDasharray: '3 3' }}
+                      formatter={(value, name, props) => {
+                        if (name === "x") return [`${value} мин`, "Длительность"];
+                        if (name === "y") return [`${value}/10`, "Оценка"];
+                        return [value, name];
+                      }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          const data = payload[0].payload;
+                          return (
+                            <div className="bg-white p-2 border rounded shadow-sm">
+                              <p className="font-medium">{data.agent || "Оператор"}</p>
+                              <p>{`Длительность: ${data.x} мин`}</p>
+                              <p>{`Оценка: ${data.y}/10`}</p>
+                              <p>{`Результат: ${data.category}`}</p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Legend />
+                    <Scatter
+                      name="Успешный"
+                      data={durationScoreData.filter(item => item.category === "Успешный")}
+                      fill="#22c55e"
+                    />
+                    <Scatter
+                      name="Неуспешный"
+                      data={durationScoreData.filter(item => item.category === "Неуспешный")}
+                      fill="#ef4444"
+                    />
+                    <Scatter
+                      name="Требует внимания"
+                      data={durationScoreData.filter(item => item.category === "Требует внимания")}
+                      fill="#f59e0b"
+                    />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+        <TabsContent value="custom-analysis">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Пользовательский анализ звонков</CardTitle>
+                <CardDescription>
+                  Выполните анализ звонков на основе ваших запросов
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CustomPromptAnalysis
+                  isLoading={loading}
+                  analysisResults={{
+                    keyInsights: [],
+                    successFactors: [],
+                    problems: [],
+                    recommendations: [],
+                    tags: {}
+                  }}
+                  analyzedCalls={[]}
+                  customFields={{
+                    field1: { label: "Ключевые паттерны", value: "" },
+                    field2: { label: "Факторы успеха", value: "" },
+                    field3: { label: "Рекомендации", value: "" }
+                  }}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+};
+
+export default Analytics;
