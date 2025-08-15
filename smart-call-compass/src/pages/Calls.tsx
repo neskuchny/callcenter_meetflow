@@ -172,6 +172,11 @@ const Calls = () => {
     loadCalls();
   }, []);
 
+  // Перезагружаем данные при изменении источника данных
+  useEffect(() => {
+    loadCalls(dataSource);
+  }, [dataSource]);
+
   // Обновляем выбранные звонки в глобальном состоянии
   useEffect(() => {
     if (calls.length > 0) {
